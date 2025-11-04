@@ -15,6 +15,8 @@ use tracing::{info, error};
 
 type HmacSha256 = Hmac<Sha256>;
 
+const DEFAULT_PORT: &str = "3000";
+
 #[derive(Clone)]
 struct AppState {
     bot: Bot,
@@ -111,9 +113,10 @@ const MARKDOWN_SPECIAL_CHARS: &[char] = &['_', '*', '[', ']', '(', ')', '~', '`'
 
 fn escape_markdown(text: &str) -> String {
     text.chars()
-        .flat_map(|c| match MARKDOWN_SPECIAL_CHARS.contains(&c) {
-            true => vec!['\\', c],
-            false => vec![c],
+        .flat_map(|c| if MARKDOWN_SPECIAL_CHARS.contains(&c) {
+            vec!['\\', c]
+        } else {
+            vec![c]
         })
         .collect()
 }
@@ -140,18 +143,15 @@ async fn webhook_handler(
         }
     }
 
-    let event: GitHubPushEvent = serde_json::from_slice(&body)
-        .map_err(|e| {
-            error!("Failed to parse payload: {}", e);
-            (StatusCode::BAD_REQUEST, format!("Invalid payload: {}", e))
-        })?;
+    let event = serde_json::from_slice::<GitHubPushEvent>(&body).map_err(|e| {
+        error!("Failed to parse payload: {}", e);
+        (StatusCode::BAD_REQUEST, format!("Invalid payload: {}", e))
+    })?;
 
     info!("Push event: {} commits to {}", event.commits.len(), event.repository.full_name);
 
-    let message = format_telegram_message(&event);
-
     state.bot
-        .send_message(state.chat_id, message)
+        .send_message(state.chat_id, format_telegram_message(&event))
         .parse_mode(ParseMode::MarkdownV2)
         .await
         .map_err(|e| {
@@ -179,13 +179,13 @@ async fn main() -> Result<()> {
         .context("Invalid TELEGRAM_CHAT_ID format")?;
     let webhook_secret = env::var("GITHUB_WEBHOOK_SECRET").ok().filter(|s| !s.is_empty());
     let port = env::var("PORT")
-        .unwrap_or("3000".to_string())
+        .as_deref()
+        .unwrap_or(DEFAULT_PORT)
         .parse::<u16>()
         .context("Invalid PORT format")?;
 
-    let bot = Bot::new(token);
     let state = Arc::new(AppState {
-        bot,
+        bot: Bot::new(token),
         chat_id: ChatId(chat_id),
         webhook_secret,
     });
@@ -196,8 +196,6 @@ async fn main() -> Result<()> {
         .with_state(state);
 
     let addr = format!("0.0.0.0:{}", port);
-    info!("Starting server on {}", addr);
-
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
         .context("Failed to bind to address")?;
