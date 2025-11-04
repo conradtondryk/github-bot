@@ -4,12 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-[package]
-name = "github-telegram-bot"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
 axum = "0.7"  # Web server
 teloxide = { version = "0.12", features = ["macros"] }  # Telegram API
 tokio = { version = "1", features = ["full"] }  # Async runtime
@@ -21,3 +15,4 @@ hex = "0.4"
 secrecy = { version = "0.8", features = ["alloc"] }  # Secure secret handling
 tracing = "0.1"  # Logging
 tracing-subscriber = "0.3"  # Logger setup
+dotenvy = "0.15"  # Load .env files
