@@ -1,0 +1,27 @@
+name: Telegram Notify
+
+on: push
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Send to Telegram
+        run: |
+          escape() { echo "$1" | sed 's/[_*[\]()~`>#+=|{}.!-]/\\&/g'; }
+
+          MSG="🔔 *$(escape "${{ github.repository }}")*
+
+          👤 $(escape "${{ github.actor }}")
+          🌿 \`$(escape "${{ github.ref_name }}")\`
+
+          • \`$(escape "${{ github.sha }}" | cut -c1-7)\` $(escape "${{ github.event.head_commit.message }}" | head -1)
+
+          [View Commit]($(escape "${{ github.event.head_commit.url }}"))"
+
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage" \
+            -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -d text="$MSG" \
+            -d parse_mode="MarkdownV2"
