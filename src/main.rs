@@ -34,9 +34,7 @@ struct GitHubPushEvent {
 
 #[derive(Debug, Deserialize)]
 struct Repository {
-    name: String,
     full_name: String,
-    html_url: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -49,7 +47,6 @@ struct Commit {
     id: String,
     message: String,
     author: Author,
-    url: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -59,20 +56,18 @@ struct Author {
 }
 
 fn verify_signature(secret: &str, signature: &str, payload: &[u8]) -> bool {
-    let sig_bytes = signature
+    signature
         .strip_prefix("sha256=")
         .and_then(|hex| hex::decode(hex).ok())
-        .unwrap_or_default();
-
-    if sig_bytes.is_empty() {
-        return false;
-    }
-
-    HmacSha256::new_from_slice(secret.as_bytes())
-        .expect("HMAC can take key of any size")
-        .chain_update(payload)
-        .verify_slice(&sig_bytes)
-        .is_ok()
+        .filter(|bytes| !bytes.is_empty())
+        .map(|sig_bytes| {
+            HmacSha256::new_from_slice(secret.as_bytes())
+                .expect("HMAC can take key of any size")
+                .chain_update(payload)
+                .verify_slice(&sig_bytes)
+                .is_ok()
+        })
+        .unwrap_or(false)
 }
 
 fn format_telegram_message(event: &GitHubPushEvent) -> String {
@@ -116,12 +111,9 @@ const MARKDOWN_SPECIAL_CHARS: &[char] = &['_', '*', '[', ']', '(', ')', '~', '`'
 
 fn escape_markdown(text: &str) -> String {
     text.chars()
-        .flat_map(|c| {
-            if MARKDOWN_SPECIAL_CHARS.contains(&c) {
-                vec!['\\', c]
-            } else {
-                vec![c]
-            }
+        .flat_map(|c| match MARKDOWN_SPECIAL_CHARS.contains(&c) {
+            true => vec!['\\', c],
+            false => vec![c],
         })
         .collect()
 }
@@ -130,48 +122,45 @@ async fn webhook_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     body: axum::body::Bytes,
-) -> impl IntoResponse {
+) -> Result<impl IntoResponse, (StatusCode, String)> {
     info!("Received webhook request");
 
     if let Some(secret) = &state.webhook_secret {
-        if let Some(signature) = headers.get("x-hub-signature-256") {
-            let sig_str = signature.to_str().unwrap_or("");
-            if !verify_signature(secret, sig_str, &body) {
-                error!("Invalid webhook signature");
-                return (StatusCode::UNAUTHORIZED, "Invalid signature").into_response();
-            }
-        } else {
-            error!("Missing webhook signature");
-            return (StatusCode::UNAUTHORIZED, "Missing signature").into_response();
+        let signature = headers
+            .get("x-hub-signature-256")
+            .and_then(|h| h.to_str().ok())
+            .ok_or_else(|| {
+                error!("Missing webhook signature");
+                (StatusCode::UNAUTHORIZED, "Missing signature".to_string())
+            })?;
+
+        if !verify_signature(secret, signature, &body) {
+            error!("Invalid webhook signature");
+            return Err((StatusCode::UNAUTHORIZED, "Invalid signature".to_string()));
         }
     }
 
-    let event: GitHubPushEvent = match serde_json::from_slice(&body) {
-        Ok(e) => e,
-        Err(e) => {
+    let event: GitHubPushEvent = serde_json::from_slice(&body)
+        .map_err(|e| {
             error!("Failed to parse payload: {}", e);
-            return (StatusCode::BAD_REQUEST, format!("Invalid payload: {}", e)).into_response();
-        }
-    };
+            (StatusCode::BAD_REQUEST, format!("Invalid payload: {}", e))
+        })?;
 
     info!("Push event: {} commits to {}", event.commits.len(), event.repository.full_name);
 
     let message = format_telegram_message(&event);
 
-    match state.bot
+    state.bot
         .send_message(state.chat_id, message)
         .parse_mode(ParseMode::MarkdownV2)
         .await
-    {
-        Ok(_) => {
-            info!("Successfully sent notification to Telegram");
-            (StatusCode::OK, "Notification sent").into_response()
-        }
-        Err(e) => {
+        .map_err(|e| {
             error!("Failed to send Telegram message: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, "Failed to send notification").into_response()
-        }
-    }
+            (StatusCode::INTERNAL_SERVER_ERROR, "Failed to send notification".to_string())
+        })?;
+
+    info!("Successfully sent notification to Telegram");
+    Ok((StatusCode::OK, "Notification sent"))
 }
 
 async fn health_check() -> impl IntoResponse {
@@ -190,7 +179,7 @@ async fn main() -> Result<()> {
         .context("Invalid TELEGRAM_CHAT_ID format")?;
     let webhook_secret = env::var("GITHUB_WEBHOOK_SECRET").ok().filter(|s| !s.is_empty());
     let port = env::var("PORT")
-        .unwrap_or_else(|_| "3000".to_string())
+        .unwrap_or("3000".to_string())
         .parse::<u16>()
         .context("Invalid PORT format")?;
 
