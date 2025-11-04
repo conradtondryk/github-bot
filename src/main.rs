@@ -1,3 +1,4 @@
+use anyhow::{Context, Result};
 use axum::{
     extract::State,
     http::{HeaderMap, StatusCode},
@@ -59,53 +60,43 @@ struct Author {
 
 fn verify_signature(secret: &str, signature: &str, payload: &[u8]) -> bool {
     // GitHub sends signature as "sha256=<hex>"
-    let sig_bytes = match signature.strip_prefix("sha256=") {
-        Some(hex) => match hex::decode(hex) {
-            Ok(bytes) => bytes,
-            Err(_) => return false,
-        },
-        None => return false,
-    };
+    let sig_bytes = signature
+        .strip_prefix("sha256=")
+        .and_then(|hex| hex::decode(hex).ok())
+        .unwrap_or_default();
 
-    let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
-        .expect("HMAC can take key of any size");
-    mac.update(payload);
+    if sig_bytes.is_empty() {
+        return false;
+    }
 
-    mac.verify_slice(&sig_bytes).is_ok()
+    HmacSha256::new_from_slice(secret.as_bytes())
+        .expect("HMAC can take key of any size")
+        .chain_update(payload)
+        .verify_slice(&sig_bytes)
+        .is_ok()
 }
 
 fn format_telegram_message(event: &GitHubPushEvent) -> String {
     let branch = event.git_ref.strip_prefix("refs/heads/").unwrap_or(&event.git_ref);
-    let commit_count = event.commits.len();
-    let commits_word = if commit_count == 1 { "commit" } else { "commits" };
+    let commits_word = if event.commits.len() == 1 { "commit" } else { "commits" };
 
     let mut message = format!(
-        "🔔 *New Push to {}*\n\n",
-        escape_markdown(&event.repository.full_name)
-    );
-
-    message.push_str(&format!(
-        "👤 *Pusher:* {}\n",
-        escape_markdown(&event.pusher.name)
-    ));
-
-    message.push_str(&format!(
-        "🌿 *Branch:* `{}`\n",
-        escape_markdown(branch)
-    ));
-
-    message.push_str(&format!(
-        "📝 *{} {}*\n\n",
-        commit_count,
+        "🔔 *New Push to {}*\n\n\
+         👤 *Pusher:* {}\n\
+         🌿 *Branch:* `{}`\n\
+         📝 *{} {}*\n\n",
+        escape_markdown(&event.repository.full_name),
+        escape_markdown(&event.pusher.name),
+        escape_markdown(branch),
+        event.commits.len(),
         commits_word
-    ));
+    );
 
     // Show up to 5 commits
     for commit in event.commits.iter().take(5) {
         let short_sha = &commit.id[..7];
         let first_line = commit.message.lines().next().unwrap_or("");
-        let author = commit.author.username.as_ref()
-            .unwrap_or(&commit.author.name);
+        let author = commit.author.username.as_ref().unwrap_or(&commit.author.name);
 
         message.push_str(&format!(
             "• `{}` {} \\- _{}_\n",
@@ -119,21 +110,20 @@ fn format_telegram_message(event: &GitHubPushEvent) -> String {
         message.push_str(&format!("\n_\\.\\.\\. and {} more commits_\n", event.commits.len() - 5));
     }
 
-    message.push_str(&format!(
-        "\n[View Changes]({})",
-        escape_markdown(&event.compare)
-    ));
-
+    message.push_str(&format!("\n[View Changes]({})", escape_markdown(&event.compare)));
     message
 }
 
+const MARKDOWN_SPECIAL_CHARS: &[char] = &['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!'];
+
 fn escape_markdown(text: &str) -> String {
     text.chars()
-        .map(|c| match c {
-            '_' | '*' | '[' | ']' | '(' | ')' | '~' | '`' | '>' | '#' | '+' | '-' | '=' | '|' | '{' | '}' | '.' | '!' => {
-                format!("\\{}", c)
+        .flat_map(|c| {
+            if MARKDOWN_SPECIAL_CHARS.contains(&c) {
+                vec!['\\', c]
+            } else {
+                vec![c]
             }
-            _ => c.to_string(),
         })
         .collect()
 }
@@ -194,28 +184,25 @@ async fn health_check() -> impl IntoResponse {
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<()> {
     // Initialize tracing
     tracing_subscriber::fmt::init();
 
     // Load environment variables
     dotenvy::dotenv().ok();
 
-    let token = env::var("TELEGRAM_TOKEN").expect("TELEGRAM_TOKEN not set");
+    let token = env::var("TELEGRAM_TOKEN").context("TELEGRAM_TOKEN not set")?;
     let chat_id = env::var("TELEGRAM_CHAT_ID")
-        .expect("TELEGRAM_CHAT_ID not set")
+        .context("TELEGRAM_CHAT_ID not set")?
         .parse::<i64>()
-        .expect("Invalid chat ID");
-    let webhook_secret = env::var("GITHUB_WEBHOOK_SECRET")
-        .ok()
-        .filter(|s| !s.is_empty());
+        .context("Invalid TELEGRAM_CHAT_ID format")?;
+    let webhook_secret = env::var("GITHUB_WEBHOOK_SECRET").ok().filter(|s| !s.is_empty());
     let port = env::var("PORT")
         .unwrap_or_else(|_| "3000".to_string())
         .parse::<u16>()
-        .expect("Invalid PORT");
+        .context("Invalid PORT format")?;
 
     let bot = Bot::new(token);
-
     let state = Arc::new(AppState {
         bot,
         chat_id: ChatId(chat_id),
@@ -233,12 +220,14 @@ async fn main() {
 
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
-        .expect("Failed to bind to address");
+        .context("Failed to bind to address")?;
 
     info!("🚀 GitHub bot is running on http://{}", addr);
     info!("Webhook endpoint: http://{}/webhook", addr);
 
     axum::serve(listener, app)
         .await
-        .expect("Server failed to start");
+        .context("Server failed to start")?;
+
+    Ok(())
 }
