@@ -59,7 +59,6 @@ struct Author {
 }
 
 fn verify_signature(secret: &str, signature: &str, payload: &[u8]) -> bool {
-    // GitHub sends signature as "sha256=<hex>"
     let sig_bytes = signature
         .strip_prefix("sha256=")
         .and_then(|hex| hex::decode(hex).ok())
@@ -92,7 +91,6 @@ fn format_telegram_message(event: &GitHubPushEvent) -> String {
         commits_word
     );
 
-    // Show up to 5 commits
     for commit in event.commits.iter().take(5) {
         let short_sha = &commit.id[..7];
         let first_line = commit.message.lines().next().unwrap_or("");
@@ -135,7 +133,6 @@ async fn webhook_handler(
 ) -> impl IntoResponse {
     info!("Received webhook request");
 
-    // Verify GitHub signature if secret is configured
     if let Some(secret) = &state.webhook_secret {
         if let Some(signature) = headers.get("x-hub-signature-256") {
             let sig_str = signature.to_str().unwrap_or("");
@@ -149,7 +146,6 @@ async fn webhook_handler(
         }
     }
 
-    // Parse the payload
     let event: GitHubPushEvent = match serde_json::from_slice(&body) {
         Ok(e) => e,
         Err(e) => {
@@ -160,7 +156,6 @@ async fn webhook_handler(
 
     info!("Push event: {} commits to {}", event.commits.len(), event.repository.full_name);
 
-    // Format and send message
     let message = format_telegram_message(&event);
 
     match state.bot
@@ -185,10 +180,7 @@ async fn health_check() -> impl IntoResponse {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize tracing
     tracing_subscriber::fmt::init();
-
-    // Load environment variables
     dotenvy::dotenv().ok();
 
     let token = env::var("TELEGRAM_TOKEN").context("TELEGRAM_TOKEN not set")?;
@@ -209,7 +201,6 @@ async fn main() -> Result<()> {
         webhook_secret,
     });
 
-    // Build the router
     let app = Router::new()
         .route("/webhook", post(webhook_handler))
         .route("/health", axum::routing::get(health_check))
