@@ -31,7 +31,7 @@ jobs:
             HASH=$(echo "$line" | jq -r '.id[0:7]')
             MESSAGE=$(echo "$line" | jq -r '.message | split("\n")[0]')
             COMMIT_URL=$(echo "$line" | jq -r '.url')
-            ESCAPED_COMMITS="${ESCAPED_COMMITS}• [\`$(escape "$HASH")\`](${COMMIT_URL}) $(escape "$MESSAGE")
+            ESCAPED_COMMITS="${ESCAPED_COMMITS}• [$(escape "$HASH")](${COMMIT_URL}) $(escape "$MESSAGE")
           "
           done < <(echo '${{ toJson(github.event.commits) }}' | jq -c '.[]')
 

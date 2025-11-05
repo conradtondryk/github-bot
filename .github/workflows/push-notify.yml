@@ -1,0 +1,10 @@
+name: Push Notification
+
+on: push
+
+jobs:
+  notify:
+    uses: conradtondryk/github-bot/.github/workflows/notify-telegram.yml@v0.2.0
+    secrets:
+      TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
