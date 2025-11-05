@@ -17,27 +17,24 @@ jobs:
           # Get the comparison URL for all changes in this push
           COMPARE_URL="${{ github.event.compare }}"
 
-          # Build commit list
-          COMMITS=""
+          # Build commit list with proper escaping
           COMMIT_COUNT=$(echo '${{ toJson(github.event.commits) }}' | jq length)
 
-          echo '${{ toJson(github.event.commits) }}' | jq -r '.[] | "• `\(.id[0:7])` \(.message | split("\n")[0])"' | while IFS= read -r line; do
-            COMMITS="${COMMITS}$(escape "$line")
+          ESCAPED_COMMITS=""
+          while IFS= read -r line; do
+            HASH=$(echo "$line" | jq -r '.id[0:7]')
+            MESSAGE=$(echo "$line" | jq -r '.message | split("\n")[0]')
+            ESCAPED_COMMITS="${ESCAPED_COMMITS}• \`$(escape "$HASH")\` $(escape "$MESSAGE")
           "
-          done
-
-          # Read commits into variable properly
-          COMMITS=$(echo '${{ toJson(github.event.commits) }}' | jq -r '.[] | "• `" + .id[0:7] + "` " + (.message | split("\n")[0])')
-          ESCAPED_COMMITS=$(echo "$COMMITS" | while IFS= read -r line; do escape "$line"; done | tr '\n' '\n')
+          done < <(echo '${{ toJson(github.event.commits) }}' | jq -c '.[]')
 
           MSG="🔔 *$(escape "${{ github.repository }}")*
 
           👤 $(escape "${{ github.actor }}")
           🌿 $(escape "${{ github.ref_name }}")
-          📦 ${COMMIT_COUNT} commit(s)
+          📦 ${COMMIT_COUNT} commit\\(s\\)
 
           ${ESCAPED_COMMITS}
-
           [View Changes](${COMPARE_URL})"
 
           curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage" \
