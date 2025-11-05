@@ -10,16 +10,35 @@ jobs:
 
       - name: Send to Telegram
         run: |
-          escape() { echo "$1" | sed 's/[_*[\]()~`>#+=|{}.!-]/\\&/g'; }
+          escape() {
+            echo "$1" | sed 's/\\/\\\\/g' | sed 's/_/\\_/g' | sed 's/\*/\\*/g' | sed 's/\[/\\[/g' | sed 's/\]/\\]/g' | sed 's/(/\\(/g' | sed 's/)/\\)/g' | sed 's/~/\\~/g' | sed 's/`/\\`/g' | sed 's/>/\\>/g' | sed 's/#/\\#/g' | sed 's/+/\\+/g' | sed 's/=/\\=/g' | sed 's/|/\\|/g' | sed 's/{/\\{/g' | sed 's/}/\\}/g' | sed 's/\./\\./g' | sed 's/!/\\!/g' | sed 's/-/\\-/g'
+          }
+
+          # Get the comparison URL for all changes in this push
+          COMPARE_URL="${{ github.event.compare }}"
+
+          # Build commit list
+          COMMITS=""
+          COMMIT_COUNT=$(echo '${{ toJson(github.event.commits) }}' | jq length)
+
+          echo '${{ toJson(github.event.commits) }}' | jq -r '.[] | "• `\(.id[0:7])` \(.message | split("\n")[0])"' | while IFS= read -r line; do
+            COMMITS="${COMMITS}$(escape "$line")
+          "
+          done
+
+          # Read commits into variable properly
+          COMMITS=$(echo '${{ toJson(github.event.commits) }}' | jq -r '.[] | "• `" + .id[0:7] + "` " + (.message | split("\n")[0])')
+          ESCAPED_COMMITS=$(echo "$COMMITS" | while IFS= read -r line; do escape "$line"; done | tr '\n' '\n')
 
           MSG="🔔 *$(escape "${{ github.repository }}")*
 
           👤 $(escape "${{ github.actor }}")
-          🌿 \`$(escape "${{ github.ref_name }}")\`
+          🌿 $(escape "${{ github.ref_name }}")
+          📦 ${COMMIT_COUNT} commit(s)
 
-          • \`$(escape "${{ github.sha }}" | cut -c1-7)\` $(escape "${{ github.event.head_commit.message }}" | head -1)
+          ${ESCAPED_COMMITS}
 
-          [View Commit]($(escape "${{ github.event.head_commit.url }}"))"
+          [View Changes](${COMPARE_URL})"
 
           curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage" \
             -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
