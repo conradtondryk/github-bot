@@ -1,6 +1,12 @@
 name: Telegram Notify
 
-on: push
+on:
+  workflow_call:
+    secrets:
+      TELEGRAM_TOKEN:
+        required: true
+      TELEGRAM_CHAT_ID:
+        required: true
 
 jobs:
   notify:
@@ -29,7 +35,6 @@ jobs:
           done < <(echo '${{ toJson(github.event.commits) }}' | jq -c '.[]')
 
           MSG="🔔 *$(escape "${{ github.repository }}")*
-
           👤 $(escape "${{ github.actor }}")
           🌿 $(escape "${{ github.ref_name }}")
           📦 ${COMMIT_COUNT} commit\\(s\\)
